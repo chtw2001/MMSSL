@@ -118,10 +118,12 @@ class Data(object):
         def normalized_adj_single(adj):
             rowsum = np.array(adj.sum(1))
 
+            # 노드간 연결 강도의 역수를 대각 행렬로 나타냄
             d_inv = np.power(rowsum, -1).flatten()
             d_inv[np.isinf(d_inv)] = 0.
             d_mat_inv = sp.diags(d_inv)
 
+            # 원본 행렬을 정규화
             norm_adj = d_mat_inv.dot(adj)
             # norm_adj = adj.dot(d_mat_inv)
             print('generate single-normalized adjacency matrix.')

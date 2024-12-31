@@ -42,12 +42,12 @@ class Trainer(object):
         self.logger.logging("PID: %d" % os.getpid())
         self.logger.logging(str(args))
 
-        self.mess_dropout = eval(args.mess_dropout)
+        self.mess_dropout = eval(args.mess_dropout) # [0.1, 0.1]
         self.lr = args.lr
-        self.emb_dim = args.embed_size
+        self.emb_dim = args.embed_size # 64
         self.batch_size = args.batch_size
-        self.weight_size = eval(args.weight_size)
-        self.n_layers = len(self.weight_size)
+        self.weight_size = eval(args.weight_size) # [64, 64]
+        self.n_layers = len(self.weight_size) # 2
         self.regs = eval(args.regs)
         self.decay = self.regs[0]
  
@@ -88,8 +88,10 @@ class Trainer(object):
 
     def csr_norm(self, csr_mat, mean_flag=False):
         rowsum = np.array(csr_mat.sum(1))
+        # 매우 작은 값을 넣어서 에러가 나지 않도록 역수를 취함
         rowsum = np.power(rowsum+1e-8, -0.5).flatten()
         rowsum[np.isinf(rowsum)] = 0.
+        # 노드의 연결 강도를 대각 행렬로 표현
         rowsum_diag = sp.diags(rowsum)
 
         colsum = np.array(csr_mat.sum(0))
@@ -306,7 +308,7 @@ class Trainer(object):
         return result
 
     def train(self):
-
+        # useless
         now_time = datetime.now()
         run_time = datetime.strftime(now_time,'%Y_%m_%d__%H_%M_%S')
 
@@ -337,6 +339,8 @@ class Trainer(object):
                 sample_time += time() - sample_t1       
 
                 with torch.no_grad():
+                    # _embeddings -> graph + user/item embedding + modal feature + attention (2)
+                    # _embeds -> graph + feature (4)
                     ua_embeddings, ia_embeddings, image_item_embeds, text_item_embeds, image_user_embeds, text_user_embeds \
                                     , _, _, _, _, _, _ \
                             = self.model(self.ui_graph, self.iu_graph, self.image_ui_graph, self.image_iu_graph, self.text_ui_graph, self.text_iu_graph)
