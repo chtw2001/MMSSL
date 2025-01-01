@@ -175,6 +175,7 @@ class MMSSL(nn.Module):
         att = F.softmax(att, dim=2)  
 
         # (4, 2, 2, user/item, 16)
+        # attention 점수를 곱하여 가중치 값 반영
         Z = torch.mul(att, V)  
         # (4, 2, user/item, 16)
         Z = torch.sum(Z, dim=2)  

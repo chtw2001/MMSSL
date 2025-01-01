@@ -36,6 +36,9 @@ def ranklist_by_heapq(user_pos_test, test_items, rating, Ks):
     return r, auc
 
 def get_auc(item_score, user_pos_test):
+    # item_score -> test할 item의 예측 score, 
+    # user_pos_test -> 정답지
+    # score를 기준으로 내림차순 정렬
     item_score = sorted(item_score.items(), key=lambda kv: kv[1])
     item_score.reverse()
     item_sort = [x[0] for x in item_score]
@@ -64,6 +67,7 @@ def ranklist_by_sorted(user_pos_test, test_items, rating, Ks):
             r.append(1)
         else:
             r.append(0)
+    # test할 item의 score, 정답지
     auc = get_auc(item_score, user_pos_test)
     return r, auc
 
@@ -81,6 +85,9 @@ def get_performance(user_pos_test, r, auc, Ks):
 
 
 def test_one_user(x):
+    # rate_batch -> (batch_size, item_num)
+    # user_batch -> (batch_size, )
+    # [is_val] * len(user_batch)
     # user u's ratings for user u
     is_val = x[-1]
     rating = x[0]
@@ -149,6 +156,8 @@ def test_torch(ua_embeddings, ia_embeddings, users_to_test, is_val, drop_flag=Fa
             item_batch = range(ITEM_NUM)
             u_g_embeddings = ua_embeddings[user_batch]
             i_g_embeddings = ia_embeddings[item_batch]
+            # (batch_size, 64) * (64, item_num)
+            # (batch_size, item_num)
             rate_batch = torch.matmul(u_g_embeddings, torch.transpose(i_g_embeddings, 0, 1))
 
         rate_batch = rate_batch.detach().cpu().numpy()

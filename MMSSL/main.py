@@ -143,21 +143,26 @@ class Trainer(object):
 
         LAMBDA = 0.3
 
+        # (2*batch_size, 64)
         xf = xf.detach()
         xr = xr.detach()
 
         alpha = torch.rand(args.batch_size*2, 1).cuda()
+        # (2*batch_size, 64)
         alpha = alpha.expand_as(xr)
 
+        # random값으로 두 값의 중간을 계산
         interpolates = alpha * xr + ((1 - alpha) * xf)
         interpolates.requires_grad_()
 
+        # 중간 값에 대한 출력 결과(진짜일 확률)
         disc_interpolates = D(interpolates)
 
         gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
                                 grad_outputs=torch.ones_like(disc_interpolates),
                                 create_graph=True, retain_graph=True, only_inputs=True)[0]
 
+        # l2노름에 1을 뺀 값에 대해서 mse를 계산. 둘의 차이점인가?
         gp = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
 
         return gp
@@ -218,10 +223,12 @@ class Trainer(object):
         return torch.mm(z1, z2.t())
 
     def batched_contrastive_loss(self, z1, z2, batch_size=1024):
-
+        # z1 -> modal-user embedding (user, 64)
+        # z2 -> 전체 embedding (user, 64)
         device = z1.device
         num_nodes = z1.size(0)
         num_batches = (num_nodes - 1) // batch_size + 1
+        # 지수 함수를 적용하여 확률 정보로 출력
         f = lambda x: torch.exp(x / args.tau)   #       
 
         indices = torch.arange(0, num_nodes).to(device)
@@ -234,7 +241,9 @@ class Trainer(object):
             tmp_between_sim_list = []
             for j in range(num_batches):
                 tmp_j = indices[j * batch_size:(j + 1) * batch_size]
+                # 왜 z1끼리 하는거지? 같은 행렬로 진행. 자기유사도를 분모로 사용하기 위함
                 tmp_refl_sim = f(self.sim(z1[tmp_i], z1[tmp_j]))  
+                # z1, z2의 유사도 행렬
                 tmp_between_sim = f(self.sim(z1[tmp_i], z2[tmp_j]))  
 
                 tmp_refl_sim_list.append(tmp_refl_sim)
@@ -243,6 +252,9 @@ class Trainer(object):
             refl_sim = torch.cat(tmp_refl_sim_list, dim=-1)
             between_sim = torch.cat(tmp_between_sim_list, dim=-1)
 
+            # between_sim[:, i * batch_size:(i + 1) * batch_size].diag() -> 현재 배치에서의 정보로 대각행렬 생성
+            # refl_sim.sum(1) + between_sim.sum(1) -> modal의 자기 유사도 + modal과 user의 유사도
+            # - refl_sim[:, i * batch_size:(i + 1) * batch_size].diag() -> 자기 유사도는 제외하고 다른 user와의 유사도를 정확히 계산하기 위함
             losses.append(-torch.log(between_sim[:, i * batch_size:(i + 1) * batch_size].diag()/ (refl_sim.sum(1) + between_sim.sum(1) - refl_sim[:, i * batch_size:(i + 1) * batch_size].diag())+1e-8))
 
             del refl_sim, between_sim, tmp_refl_sim_list, tmp_between_sim_list
@@ -284,6 +296,7 @@ class Trainer(object):
 
     def u_sim_calculation(self, users, user_final, item_final):
         topk_u = user_final[users]
+        # user-item 원본 인접 행렬
         u_ui = torch.tensor(self.ui_graph_raw[users].todense()).cuda()
 
         num_batches = (self.n_items - 1) // args.batch_size + 1
@@ -291,8 +304,11 @@ class Trainer(object):
         u_sim_list = []
 
         for i_b in range(num_batches):
+            # item index
             index = indices[i_b * args.batch_size:(i_b + 1) * args.batch_size]
+            # item embedding과 user embedding의 유사도
             sim = torch.mm(topk_u, item_final[index].T)
+            # target aware과 비슷한 연산. 원래 관계가 있는 edge에 유사도를 곱해서 가중함
             sim_gt = torch.multiply(sim, (1-u_ui[:, index]))
             u_sim_list.append(sim_gt)
                 
@@ -344,26 +360,40 @@ class Trainer(object):
                     ua_embeddings, ia_embeddings, image_item_embeds, text_item_embeds, image_user_embeds, text_user_embeds \
                                     , _, _, _, _, _, _ \
                             = self.model(self.ui_graph, self.iu_graph, self.image_ui_graph, self.image_iu_graph, self.text_ui_graph, self.text_iu_graph)
+                # graph, user/item embedding, modality, attention. 모든 정보를 사용하여 계산 된 가중치의 유사도
                 ui_u_sim_detach = self.u_sim_calculation(users, ua_embeddings, ia_embeddings).detach()
+                # graph, image modal. 정보를 사용하여 계산 된 가중치의 유사도
                 image_u_sim_detach = self.u_sim_calculation(users, image_user_embeds, image_item_embeds).detach()
+                # graph, text modal. 정보를 사용하여 계산 된 가중치의 유사도
                 text_u_sim_detach = self.u_sim_calculation(users, text_user_embeds, text_item_embeds).detach()
+                # multi modal의 가중치로 inputf를 생성. 이것은 가짜 데이터
                 inputf = torch.cat((image_u_sim_detach, text_u_sim_detach), dim=0)
                 predf = (self.D(inputf))
+                # 가짜 데이터이기 때문에 진짜일 확률 그대로를 손실로 사용
                 lossf = (predf.mean())
                 u_ui = torch.tensor(self.ui_graph_raw[users].todense()).cuda()
+                # 원본 인접 행렬에 매우 작은 값의 노이즈를 추가하고 확률 분포로 변경
                 u_ui = F.softmax(u_ui - args.log_log_scale*torch.log(-torch.log(torch.empty((u_ui.shape[0], u_ui.shape[1]), dtype=torch.float32).uniform_(0,1).cuda()+1e-8)+1e-8)/args.real_data_tau, dim=1) #0.002  
                 u_ui += ui_u_sim_detach*args.ui_pre_scale                  
                 u_ui = F.normalize(u_ui, dim=1)  
                 inputr = torch.cat((u_ui, u_ui), dim=0)
                 predr = (self.D(inputr))
+                # 진짜 데이터를 진짜라고 말하면 손실이 작아짐
                 lossr = - (predr.mean())
+                # gradient_penalty 함수는 잘 모르겠음. 
+                # 가짜 데이터와 진짜 데이터의 차이를 줄이기 위한 loss인가?
                 gp = self.gradient_penalty(self.D, inputr, inputf.detach())
+                # discriminator의 손실 계산 후 가중치 업데이트
                 loss_D = lossr + lossf + args.gp_rate*gp 
                 self.optim_D.zero_grad()
                 loss_D.backward()
                 self.optim_D.step()
                 line_d_loss.append(loss_D.detach().data)
 
+                # _embeddings -> graph + user/item embedding + modal feature + attention (2)
+                # _feats -> graph + feature (4)
+                # _embeddings -> graph + user/item embedding + modal feature + attention (2) (첫번째 나온 것과 동일함)
+                # _id -> graph + user/item embedding (4)
                 G_ua_embeddings, G_ia_embeddings, G_image_item_embeds, G_text_item_embeds, G_image_user_embeds, G_text_user_embeds \
                                 , G_user_emb, _, G_image_user_id, G_text_user_id, _, _ \
                         = self.model(self.ui_graph, self.iu_graph, self.image_ui_graph, self.image_iu_graph, self.text_ui_graph, self.text_iu_graph)
@@ -372,14 +402,20 @@ class Trainer(object):
                 G_u_g_embeddings = G_ua_embeddings[users]
                 G_pos_i_g_embeddings = G_ia_embeddings[pos_items]
                 G_neg_i_g_embeddings = G_ia_embeddings[neg_items]
+                # reg_loss = 0.0
                 G_batch_mf_loss, G_batch_emb_loss, G_batch_reg_loss = self.bpr_loss(G_u_g_embeddings, G_pos_i_g_embeddings, G_neg_i_g_embeddings)
+                # modal로 계산 된 embedding의 user-item별 유사도
                 G_image_u_sim = self.u_sim_calculation(users, G_image_user_embeds, G_image_item_embeds)
                 G_text_u_sim = self.u_sim_calculation(users, G_text_user_embeds, G_text_item_embeds)
                 G_image_u_sim_detach = G_image_u_sim.detach() 
                 G_text_u_sim_detach = G_text_u_sim.detach()
 
 
+                # idx가 1일때 부터 조건문에 통과함
+                # args.T가 2여야 하는거 아닌가? 1이면 self.image/text_ui_index가 한 번 빼고는 항상 비어있을텐데
                 if idx%args.T==0 and idx!=0:
+                    # (user_num, item_num)
+                    # user-item간 topk에 속한 edge는 1로 세팅되어있음
                     self.image_ui_graph_tmp = csr_matrix((torch.ones(len(self.image_ui_index['x'])),(self.image_ui_index['x'], self.image_ui_index['y'])), shape=(self.n_users, self.n_items))
                     self.text_ui_graph_tmp = csr_matrix((torch.ones(len(self.text_ui_index['x'])),(self.text_ui_index['x'], self.text_ui_index['y'])), shape=(self.n_users, self.n_items))
                     self.image_iu_graph_tmp = self.image_ui_graph_tmp.T
@@ -397,29 +433,37 @@ class Trainer(object):
                         self.csr_norm(self.text_iu_graph_tmp, mean_flag=True)
                         ).cuda()
 
+                    # epoch 2부터는 계속 빈 리스트인데 어떻게 되는거지?
                     self.image_ui_index = {'x':[], 'y':[]}
                     self.text_ui_index = {'x':[], 'y':[]}
 
                 else:
                     _, image_ui_id = torch.topk(G_image_u_sim_detach, int(self.n_items*args.m_topk_rate), dim=-1)
+                    # user를 self.n_items*args.m_topk_rate번 반복하여 삽입.
+                    # (user_num, n_item * m_top_rate)
                     self.image_ui_index['x'] += np.array(torch.tensor(users).repeat(1, int(self.n_items*args.m_topk_rate)).view(-1)).tolist()
+                    # user에 대해 상위 self.n_items*args.m_topk_rate개의 item을 삽입
                     self.image_ui_index['y'] += np.array(image_ui_id.cpu().view(-1)).tolist()
                     _, text_ui_id = torch.topk(G_text_u_sim_detach, int(self.n_items*args.m_topk_rate), dim=-1)
                     self.text_ui_index['x'] += np.array(torch.tensor(users).repeat(1, int(self.n_items*args.m_topk_rate)).view(-1)).tolist()
                     self.text_ui_index['y'] += np.array(text_ui_id.cpu().view(-1)).tolist()
 
 
+                # modal과 graph로만 게산된 embedding으로 feature regularization loss 계산
                 feat_emb_loss = self.feat_reg_loss_calculation(G_image_item_embeds, G_text_item_embeds, G_image_user_embeds, G_text_user_embeds)
 
                 batch_contrastive_loss = 0
+                # modal-user의 embedding, 전체 embedding으로 contrative loss 계산
                 batch_contrastive_loss1 = self.batched_contrastive_loss(G_image_user_id[users],G_user_emb[users])
                 batch_contrastive_loss2 = self.batched_contrastive_loss(G_text_user_id[users],G_user_emb[users])
   
                 batch_contrastive_loss = batch_contrastive_loss1 + batch_contrastive_loss2 
     
+                # modal + user/item embedding
                 G_inputf = torch.cat((G_image_u_sim, G_text_u_sim), dim=0)
                 G_predf = (self.D(G_inputf))
 
+                # 여기에 나오는 discriminator의 loss는 학습하지 않네?
                 G_lossf = -(G_predf.mean())
                 batch_loss = G_batch_mf_loss + G_batch_emb_loss + G_batch_reg_loss + feat_emb_loss + args.cl_rate*batch_contrastive_loss + args.G_rate*G_lossf  #feat_emb_loss
 
@@ -504,6 +548,7 @@ class Trainer(object):
         pos_scores = torch.sum(torch.mul(users, pos_items), dim=1)
         neg_scores = torch.sum(torch.mul(users, neg_items), dim=1)
 
+        # embedding의 l2노름으로 규제항 계산
         regularizer = 1./2*(users**2).sum() + 1./2*(pos_items**2).sum() + 1./2*(neg_items**2).sum()        
         regularizer = regularizer / self.batch_size
 
